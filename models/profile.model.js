@@ -8,8 +8,8 @@ const path = require('path');
 const fs = require('fs');
 const uuidv4 = require('uuid/v4');
 const md5 = require('md5');
+const settings  = require('../settings');
 
-const privacy_types = ['private','public'];
 const image_sizes = []
 
 const ProfileSchema = new Schema(
@@ -59,10 +59,8 @@ const ProfileSchema = new Schema(
             default: '',
         },
         images: [{
-            fd: {
-                type: String,
-                required: true,
-            }
+            type: Schema.Types.ObjectId,
+            ref: 'Image',
         }],
         url: {
             type: String,
@@ -82,35 +80,33 @@ const ProfileSchema = new Schema(
             type: Schema.Types.Mixed,
             default: [],
         },
+        storage: {
+            type: String,
+            default: null,
+        },
         privacy: {
             email: {
                 type: String,
-                enum: privacy_types,
+                enum: settings.privacy_types,
                 default: 'private',
             },
             name: {
                 first: {
                     type: String,
-                    enum: privacy_types,
+                    enum: settings.privacy_types,
                     default: 'public',
                 },
                 last: {
                     type: String,
-                    enum: privacy_types,
+                    enum: settings.privacy_types,
                     default: 'private',
                 },
             },
             bio: {
                 type: String,
-                enum: privacy_types,
+                enum: settings.privacy_types,
                 default: 'private',
             },
-            images: [{
-                type: String,
-                enum: privacy_types,
-                default: 'private',
-            }]
-
         },
         recoveryCode: {
             type: String,
@@ -133,11 +129,6 @@ const ProfileSchema = new Schema(
     Virtuals
 */
 
-ProfileSchema.virtual('storage')
-    .get(function () {
-        return path.resolve(this.api.storage + '/' + this.token);
-    });
-
 
 /*
     Generate token
@@ -146,6 +137,7 @@ ProfileSchema.pre('validate',function pre_validate(next) {
     if ( typeof this.token === 'undefined' || this.token === null || this.token === '' ) {
         this.token = md5(uuidv4());
     }
+    this.storage = path.resolve(this.api.storage + '/' + this.token);
     next();
 });
 
@@ -166,11 +158,13 @@ ProfileSchema.pre('save', function pre_save_create_folder(next) {
     Methods
 */
 
-ProfileSchema.method('getImageUrl', function (index) {
-    return '/profile/' + this.token + '/img/'+index;
+ProfileSchema.method('getImageByName', async function ( image_name) {
+    const image = await mongoose.model('Image').findOne({deleted: false, api: this.api, name: image_name, owner: this});
+
+    return !!image ? image : null;
 });
 
-ProfileSchema.method('parseData',function ( mode = 'private') {
+ProfileSchema.method('parseData', async function ( mode = 'private') {
     const data = {
         username: this.username,
         name: {},
@@ -197,13 +191,12 @@ ProfileSchema.method('parseData',function ( mode = 'private') {
         data.token = this.token;
     }
 
-    this.images.forEach((image,index) => {
-        if (mode === 'private' || this.privacy.images[i] === 'public' ) {
-            data.images.push({
-                url: this.getImageUrl(index)
-            });
-        }
-    });
+    const privacy_where = (mode === 'private') ? {} : { 'privacy': 'public'};
+    const images = await mongoose.model('Image').find({'_id': {'$in': this.images}, deleted: false, ...privacy_where });//.populate('owner');
+    data.images = images.map( image => ({
+        url: image.url,
+        custom_data: image.custom_data,
+    }));
 
 
     return data;

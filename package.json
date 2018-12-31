@@ -10,6 +10,7 @@
     "debug": "~2.6.9",
     "express": "~4.16.0",
     "express-fileupload": "^1.0.0",
+    "g": "^2.0.1",
     "md5": "^2.2.1",
     "mongoose": "^5.4.1",
     "mongoose-string-query": "^0.2.5",

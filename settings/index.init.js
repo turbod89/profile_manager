@@ -23,4 +23,5 @@ module.exports = {
         },
         acceptedMimeTypes: ['image/jpeg','image/png'],
     },
+    privacy_types: ['private','public'],
 };

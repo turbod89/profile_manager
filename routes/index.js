@@ -21,13 +21,13 @@ router.use(function responseObject (req,res,next) {
     2. Import crud
 */
 
-const crudRouter = require('./crud');
+const crudRouter = require('./profile-crud');
 router.use(crudRouter);
 
 /*
     3. Import images
  */
-const imagesRouter = require('./images');
+const imagesRouter = require('./images-crud');
 router.use(imagesRouter);
 
 

@@ -4,11 +4,11 @@ const router = express.Router();
 const db = require('../database');
 const {Profile, Api} = require('../models');
 
-const {decorate, require_api_auth} = require('./decorators');
+const {decorate, require_api_auth, require_some_auth} = require('./decorators');
 
 /**
  * @apiDefine Profiles
- * @apiHeader (Headers) {String} Api-token
+ *
  *
  */
 
@@ -17,8 +17,9 @@ const {decorate, require_api_auth} = require('./decorators');
  *
  * @api {get} /profiles Get all profiles
  * @apiName Get profiles
- * @apiDescription Get all profiles
+ * @apiDescription Get all profiles.
  * @apiGroup Profiles
+ * @apiHeader (Headers) {String} Api-token
  *
  */
 
@@ -26,8 +27,8 @@ router.get('/profiles',
     decorate(
         require_api_auth,
         async function(req, res, next) {
-            const data = await Profile.find({api: req.me, deleted: false})
-                .then ( data => data.map(profile => profile.parseData()))
+            const data = await Profile.find({api: req.api, deleted: false})
+                .then ( data => Promise.all(data.map( profile => profile.parseData())) )
                 .catch( (err) => {
                     if (!!err) {
                         req.response.addError(err.code,err.errmsg);
@@ -46,10 +47,56 @@ router.get('/profiles',
 /**
  * @apiUse Profiles
  *
+ * @api {get} /profiles/:username Get single profile
+ * @apiName Get single profile
+ * @apiDescription Get single profile.
+ * @apiGroup Profiles
+ * @apiHeader (Headers) {String} Api-token Required if no Authorization Bearer provided.
+ * @apiHeader (Headers) {String} Authorization Bearer Auth-token. Required if no Api-token provided.
+ *
+ */
+
+
+router.get('/profiles/:username',
+    decorate(
+        require_some_auth,
+        async function (req, res, next) {
+            const profile = await Profile.findOne({api: req.api, deleted: false, username: req.params.username}).populate('api').populate('images');
+
+            if (!!profile) {
+                req.target_profile = profile;
+                return next();
+            }
+
+            req.response.addError(1, `No user with username '${req.params.username}'.`);
+            req.response.send(res);
+        },
+    )
+);
+
+
+router.get('/profiles/:username',
+    decorate(
+        async function(req, res, next) {
+            const profile = req.target_profile;
+            const mode = (req.me instanceof Api) ? 'private' : 'public';
+            const profile_data = await profile.parseData(mode);
+
+            req.response.send(res,profile_data);
+            next();
+        },
+    )
+);
+
+/**
+ * @apiUse Profiles
+ *
  * @api {post} /profiles Creates a new profile
  * @apiName Post profiles
  * @apiDescription Creates a new profile
  * @apiGroup Profiles
+ *
+ * @apiHeader (Headers) {String} Api-token
  *
  * @apiParamExample {json} Request example:
  *
@@ -71,7 +118,7 @@ router.post('/profiles',
         async function(req, res, next) {
 
             const profile_data = req.body;
-            profile_data.api = req.me;
+            profile_data.api = req.api;
 
             // check obligatory fields TODO
 
@@ -97,7 +144,7 @@ router.post('/profiles',
                 }
             });
 
-            req.response.send(res,profile.parseData());
+            req.response.send(res,await profile.parseData());
             return next();
         }
     )
@@ -109,15 +156,22 @@ router.post('/profiles',
  *
  * @api {put} /profiles Updates a profile
  * @apiName Put profiles
- * @apiDescription Updates a profile. Profile is getted by username, email or token.
+ * @apiDescription Updates a profile. Profile is getted by username, email, token or profile authentication.
  * If token is provided, fields email and token will be updated if provided.
  * Else, if username is provided, field email will be updated if provided.
+ * Furthermore, if request is done through Authorization header, none of above is required. The authenticated profile will be used.
  *
  * Response will contain profile updated info.
  *
+ *
  * @apiGroup Profiles
  *
- * @apiParamExample {json} Request example:
+ * @apiHeader (Headers) {String} Api-token Required if no Authorization Bearer provided.
+ * @apiHeader (Headers) {String} Authorization Bearer Auth-token. Required if no Api-token provided.
+ *
+ * @apiParamExample {json} Request example 1:
+ *
+ * Through api-token header.
  *
  * {
  *      "username": "test_user",
@@ -129,14 +183,33 @@ router.post('/profiles',
  *      "bio": "Little biography"
  * }
  *
+ * @apiParamExample {json} Request example 2:
+ *
+ * Through Authorization Bearer header
+ *
+ * {
+ *      "bio": "Little biography"
+ * }
+ *
+ * @apiParamExample {json} Request example 3:
+ *
+ * Through Authorization Bearer header
+ *
+ * {
+ *      "token": <token>,
+ *      "email": "new_test_email@example.com",
+ *      "bio": "Little biography"
+ * }
+ *
  */
 
 router.put('/profiles',
-    require_api_auth(
+    decorate(
+        require_some_auth,
         async function(req, res, next) {
 
             const profile_data = req.body;
-            profile_data.api = req.me;
+            profile_data.api = req.api;
 
             const profile = await (async function () {
 
@@ -152,6 +225,9 @@ router.put('/profiles',
                     const profile = await Profile.findOne({api: profile_data.api, deleted: false, email: profile_data.email});
                     delete profile_data.email;
                     return profile;
+                } else if (req.me instanceof Profile) {
+                    const profile = req.me;
+                    return profile;
                 }
 
                 return null;
@@ -164,17 +240,20 @@ router.put('/profiles',
                 return next();
             }
 
-            await Profile.findOneAndUpdate({_id: profile._id},profile_data, (err, profile) => {
-                if (!!err) {
-                    req.response.addError(err.code, err.errmsg);
-                }
-            })
-            ;
+            if ( req.me instanceof Api || req.me === profile) {
 
-            const updatedProfile = await Profile.findById(profile._id);
+                await Profile.findOneAndUpdate({_id: profile._id}, profile_data, (err, profile) => {
+                    if (!!err) {
+                        req.response.addError(err.code, err.errmsg);
+                    }
+                })
+                ;
 
-            req.response.send(res,updatedProfile.parseData());
-            return next();
+                const updatedProfile = await Profile.findById(profile._id);
+
+                req.response.send(res, await updatedProfile.parseData());
+                return next();
+            }
         }
     )
 );
@@ -186,6 +265,8 @@ router.put('/profiles',
  * @api {delete} /profiles Deletes a profile
  * @apiName Delete profiles
  * @apiDescription Deletes a profile. Profile is getted by username, email or token.
+ *
+ * @apiHeader (Headers) {String} Api-token
  *
  * @apiGroup Profiles
  *
@@ -202,7 +283,7 @@ router.delete('/profiles',
         async function(req, res, next) {
 
             const profile_data = req.body;
-            profile_data.api = req.me;
+            profile_data.api = req.api;
 
             const profile = await (async function () {
 
